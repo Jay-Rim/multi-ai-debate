@@ -1,0 +1,5 @@
+streamlit>=1.39
+playwright>=1.49
+pyngrok>=7.2
+python-dotenv>=1.0
+python-docx>=1.1
