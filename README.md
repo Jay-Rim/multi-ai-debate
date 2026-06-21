@@ -1,109 +1,340 @@
-# Multi AI Debate
+# AI 토론
 
-Streamlit and Playwright application that lets the subscribed web versions of
-Gemini, ChatGPT, and Claude debate without API billing.
+Gemini, ChatGPT, Claude의 **유료 웹 서비스 화면을 Playwright로 자동 조작**하여 서로 토론하게 만드는 Streamlit 애플리케이션입니다.
 
-The fixed workflow is:
+별도의 AI API를 호출하지 않으므로 API 사용료는 발생하지 않습니다. 단, 각 AI 서비스의 웹사이트에 로그인할 수 있는 본인 계정이 필요합니다.
 
-1. Gemini explores broadly and proposes alternatives.
-2. ChatGPT checks logic, evidence, operational risk, and feasibility.
-3. Claude converges on a decision and execution plan.
-4. ChatGPT acts as the final dissenter and challenges Claude's draft.
-5. Claude produces a revised final answer.
+## 토론 진행 방식
 
-The app stores the report locally as a Word document and can send a short
-completion notification through Telegram.
+토론 순서는 다음과 같이 고정되어 있습니다.
 
-## Important limitations
+1. **Gemini - 발산**
+   - 주제를 넓게 탐색합니다.
+   - 가능한 선택지, 숨은 변수, 대안과 반대 가능성을 제시합니다.
 
-- This project automates consumer web interfaces. Site DOM changes can break
-  selectors without warning.
-- You must log in manually to each service using your own account and comply
-  with each service's terms and policies.
-- CAPTCHA and login confirmation may require manual interaction.
-- A visible desktop session is required because the browser runs with
-  `headless=False`.
-- Do not commit `.env`, browser profiles, debate history, logs, or generated
-  reports.
+2. **ChatGPT - 검증**
+   - Gemini 주장의 논리적 허점과 근거 부족을 검토합니다.
+   - 비용, 시간, 운영 위험과 실제 실행 가능성을 따집니다.
 
-## Requirements
+3. **Claude - 수렴**
+   - Gemini와 ChatGPT의 의견을 종합합니다.
+   - 최종 판단과 실행 방안을 제시합니다.
 
-- Python 3.11 or newer
-- Google Chrome or Microsoft Edge
-- Active web subscriptions/accounts for the AI services you want to use
-- Windows is the best-tested platform because long prompt entry uses the
-  Windows Unicode clipboard API
-- Optional: ngrok account for external access
-- Optional: Telegram bot for completion notifications
+4. **ChatGPT - 최종 반대자**
+   - Claude의 결론이 틀렸을 가능성을 다시 검토합니다.
+   - 성급한 결론, 누락된 위험, 과대평가된 실행 가능성을 확인합니다.
 
-## Installation
+5. **Claude - 수정 최종안**
+   - ChatGPT의 최종 반론을 반영해 최종 보고서를 수정합니다.
+
+완료된 결과는 Word 문서로 로컬 PC에 저장됩니다. 설정한 경우 Telegram으로 완료 알림도 받을 수 있습니다.
+
+## 주요 기능
+
+- Gemini, ChatGPT, Claude 웹사이트 자동 제어
+- 토론 세트 수 설정
+- 토론 도중 같은 채팅 입력창으로 진행자 의견 개입
+- 각 AI 답변이 끝날 때까지 DOM 변화를 감지하여 대기
+- 로그인 또는 CAPTCHA가 필요할 때 수동 해결 가능
+- Claude 수정 최종안을 Word 문서로 저장
+- 토론 기록과 결과 문서 로컬 보관
+- ngrok을 이용한 스마트폰·외부 네트워크 접속
+- Telegram 완료 알림
+- ChatGPT 작업 대화 링크 표시
+
+## 알아둘 점
+
+이 프로젝트는 공식 API가 아니라 AI 서비스의 웹 화면을 자동화합니다.
+
+- AI 사이트의 화면 구조가 바뀌면 셀렉터가 작동하지 않을 수 있습니다.
+- 각 AI 서비스의 이용약관과 정책을 확인하고 본인 책임하에 사용하세요.
+- 로그인, 계정 확인, CAPTCHA는 Chrome 창에서 직접 처리해야 할 수 있습니다.
+- 자동화 브라우저가 화면에 표시되므로 데스크톱 로그인 세션이 필요합니다.
+- Windows 환경에서 가장 많이 테스트했습니다.
+- 웹 구독 상태와 로그인 세션은 사용자가 직접 관리해야 합니다.
+
+## 실행 환경
+
+- Python 3.11 이상 권장
+- Google Chrome 또는 Microsoft Edge
+- Windows 10/11 권장
+- Gemini, ChatGPT, Claude에 로그인 가능한 계정
+- 선택 사항: 외부 접속을 위한 ngrok 계정
+- 선택 사항: 완료 알림을 위한 Telegram 봇
+
+## 설치 방법
+
+### 1. 저장소 복제
+
+PowerShell을 열고 다음 명령을 실행합니다.
 
 ```powershell
 git clone https://github.com/Jay-Rim/multi-ai-debate.git
 cd multi-ai-debate
+```
+
+### 2. 가상환경 만들기
+
+```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+PowerShell 실행 정책 때문에 활성화가 거부되면 현재 창에서 다음 명령을 먼저 실행합니다.
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+### 3. 패키지 설치
+
+```powershell
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-Copy-Item .env.example .env
 ```
 
-Edit `.env` before running. Use a dedicated browser profile path:
-
-```dotenv
-CHROME_USER_DATA_DIR=C:/Users/your-name/ai_debate_profile
-BROWSER_CHANNEL=chrome
-STREAMLIT_PORT=8501
-```
-
-If you leave `BROWSER_CHANNEL` blank, install Playwright Chromium:
+기본 설정은 PC에 설치된 Chrome을 사용합니다. Playwright 전용 Chromium을 사용하려면 `.env`의 `BROWSER_CHANNEL`을 비우고 다음 명령도 실행합니다.
 
 ```powershell
 python -m playwright install chromium
 ```
 
-## Run
+### 4. 환경설정 파일 만들기
+
+```powershell
+Copy-Item .env.example .env
+```
+
+메모장이나 코드 편집기로 `.env` 파일을 엽니다.
+
+```powershell
+notepad .env
+```
+
+## `.env` 설정
+
+최소 실행에는 대부분 기본값을 사용할 수 있습니다.
+
+```dotenv
+# ngrok 외부 접속을 사용할 때만 입력
+NGROK_AUTHTOKEN=
+
+# 자동화 전용 Chrome 프로필 경로
+CHROME_USER_DATA_DIR=C:/Users/사용자이름/ai_debate_profile
+
+# chrome, msedge 또는 빈 값
+BROWSER_CHANNEL=chrome
+
+STREAMLIT_PORT=8501
+
+# 선택 사항: Google 계정 선택 화면에서 자동으로 선택할 이메일
+GOOGLE_ACCOUNT=
+
+# 선택 사항: Telegram 완료 알림
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+### Chrome 프로필 설정 주의사항
+
+평소 사용하는 Chrome 프로필 폴더를 직접 지정하지 마세요. 이미 실행 중인 Chrome과 프로필 잠금이 충돌할 수 있습니다.
+
+다음처럼 **AI 토론 전용 새 폴더**를 지정하는 것이 안전합니다.
+
+```dotenv
+CHROME_USER_DATA_DIR=C:/Users/사용자이름/ai_debate_profile
+```
+
+이 폴더는 첫 실행 시 자동으로 생성됩니다.
+
+## 실행 방법
 
 ```powershell
 streamlit run app.py
 ```
 
-Open `http://localhost:8501`. A Chrome window opens with Gemini, ChatGPT, and
-Claude tabs. Log in manually the first time. The dedicated profile preserves
-those sessions for later runs.
+정상적으로 실행되면 터미널에 다음 주소가 표시됩니다.
 
-For an ngrok tunnel in a separate process:
+```text
+http://localhost:8501
+```
+
+브라우저에서 이 주소를 열면 AI 토론 화면이 나타납니다.
+
+동시에 자동화용 Chrome 창에 Gemini, ChatGPT, Claude 탭이 열립니다. 첫 실행에서는 각 탭에 직접 로그인하세요. 로그인 상태는 전용 Chrome 프로필 폴더에 저장되어 다음 실행부터 재사용됩니다.
+
+## 사용 방법
+
+1. Streamlit 화면 하단에서 토론 세트 수를 선택합니다.
+2. 채팅 입력창에 토론 주제를 입력합니다.
+3. Gemini가 먼저 가능성을 넓게 제시합니다.
+4. ChatGPT가 논리와 현실성을 검증합니다.
+5. Claude가 1차 결론을 작성합니다.
+6. ChatGPT가 최종 반대자 관점에서 결론을 다시 검토합니다.
+7. Claude가 수정 최종안을 작성합니다.
+8. Word 문서가 생성되고 결과 화면에 다운로드 버튼이 표시됩니다.
+
+토론 진행 중 채팅 입력창에 추가 의견을 쓰면 다음 AI 발화 전에 **Human-in-the-loop 진행자 개입**으로 전달됩니다.
+
+## 토론 세트 수
+
+토론 세트 수가 `1`이면 다음 순서로 진행됩니다.
+
+```text
+Gemini → ChatGPT → Claude 초안
+→ ChatGPT 최종 반대자 검토
+→ Claude 수정 최종안
+→ Word 생성
+```
+
+토론 세트 수가 `2`이면 Gemini, ChatGPT, Claude의 토론을 두 번 반복한 뒤 최종 검토 단계로 넘어갑니다.
+
+```text
+Gemini → ChatGPT → Claude
+→ Gemini → ChatGPT → Claude 초안
+→ ChatGPT 최종 반대자 검토
+→ Claude 수정 최종안
+→ Word 생성
+```
+
+## 외부 접속 설정
+
+스마트폰이나 다른 네트워크에서 접속하려면 ngrok을 사용할 수 있습니다.
+
+### 1. ngrok 토큰 발급
+
+[ngrok 대시보드](https://dashboard.ngrok.com/get-started/your-authtoken)에서 인증 토큰을 발급받아 `.env`에 입력합니다.
+
+```dotenv
+NGROK_AUTHTOKEN=본인의_ngrok_토큰
+```
+
+### 2. 터널 실행
+
+새 PowerShell 창에서 프로젝트 폴더로 이동한 뒤 실행합니다.
 
 ```powershell
+.\.venv\Scripts\Activate.ps1
 python start_tunnel.py
 ```
 
-The public URL is printed in the terminal and stored locally in
-`ngrok_url.txt`, which is excluded from Git.
+터미널에 다음과 같은 외부 URL이 표시됩니다.
 
-## Telegram notification
-
-Add these optional values to `.env`:
-
-```dotenv
-TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_CHAT_ID=your_chat_id
+```text
+NGROK_URL=https://example.ngrok-free.app
 ```
 
-Only a completion notice, saved filename, and available ChatGPT conversation
-link are sent. The debate result and Word file are not sent.
+이 주소를 스마트폰 브라우저에서 열면 됩니다. PC의 Streamlit과 자동화 Chrome은 계속 실행 중이어야 합니다.
 
-## Data and privacy
+외부 URL은 로컬의 `ngrok_url.txt`에 저장되지만 Git에는 올라가지 않습니다.
 
-The application writes local runtime data into:
+## Telegram 완료 알림
 
-- `history/`
-- `logs/`
-- `out/`
-- `ai_debate_profile/` or the path configured in `.env`
+Telegram 봇을 사용하면 토론이 끝났을 때 스마트폰으로 완료 알림을 받을 수 있습니다.
 
-All are excluded by `.gitignore`. Treat the browser profile as sensitive
-because it contains authenticated sessions.
+`.env`에 다음 값을 설정합니다.
 
-## License
+```dotenv
+TELEGRAM_BOT_TOKEN=봇_토큰
+TELEGRAM_CHAT_ID=채팅_ID
+```
 
-MIT
+알림에는 다음 정보만 포함됩니다.
+
+- 토론 완료 여부
+- 토론 주제
+- 저장된 파일명
+- 확인 가능한 경우 ChatGPT 대화 링크
+
+토론 본문과 Word 파일은 Telegram으로 전송하지 않습니다.
+
+## 생성되는 로컬 데이터
+
+실행 중 다음 폴더와 파일이 생성됩니다.
+
+| 경로 | 용도 |
+|---|---|
+| `history/` | 완료된 토론 기록 |
+| `logs/` | 실행 및 자동화 로그 |
+| `out/` | 생성된 Word 결과물 |
+| `ngrok_url.txt` | 현재 ngrok 주소 |
+| `ai_debate_profile/` | Chrome 로그인 세션 |
+
+이 항목들은 `.gitignore`에 포함되어 GitHub에 올라가지 않습니다.
+
+특히 Chrome 프로필에는 로그인 세션이 들어 있으므로 다른 사람과 공유하면 안 됩니다.
+
+## 자주 발생하는 문제
+
+### Playwright 브라우저 실행 파일이 없다는 오류
+
+예시:
+
+```text
+Executable doesn't exist
+Please run: playwright install
+```
+
+해결 방법:
+
+```powershell
+python -m playwright install chromium
+```
+
+또는 `.env`에서 설치된 Chrome을 사용합니다.
+
+```dotenv
+BROWSER_CHANNEL=chrome
+```
+
+### 같은 Chrome 프로필을 사용 중이라는 오류
+
+자동화 전용 Chrome 창을 모두 닫고 다시 실행하세요. 일반 Chrome 프로필이 아니라 별도 프로필 경로를 사용해야 합니다.
+
+### 로그인 또는 CAPTCHA에서 멈춤
+
+자동화 Chrome 창을 확인하고 직접 로그인하거나 CAPTCHA를 해결하세요. 입력창이 나타나면 자동화가 다시 진행됩니다.
+
+### 답변이 중간에 잘림
+
+AI 사이트의 응답 DOM 구조나 복사 버튼이 변경되었을 수 있습니다. `logs/debate_events.log`에서 마지막으로 처리된 AI와 오류 메시지를 확인하세요.
+
+### 외부 주소가 열리지 않음
+
+1. Streamlit이 `8501` 포트에서 실행 중인지 확인합니다.
+2. `start_tunnel.py` 프로세스가 실행 중인지 확인합니다.
+3. ngrok을 종료한 뒤 다시 실행해 새 터널을 만듭니다.
+
+로컬 상태 확인:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8501/_stcore/health
+```
+
+정상이라면 `ok`가 반환됩니다.
+
+## 보안 주의사항
+
+- `.env` 파일을 Git에 커밋하지 마세요.
+- Telegram 봇 토큰과 ngrok 토큰을 공개하지 마세요.
+- Chrome 프로필 폴더를 업로드하지 마세요.
+- 생성된 토론 문서에 사내 정보나 개인정보가 포함될 수 있으므로 공개 저장소에 올리지 마세요.
+- 외부 ngrok URL을 공유하면 해당 주소를 아는 사람이 Streamlit 화면에 접근할 수 있습니다.
+
+## 프로젝트 구조
+
+```text
+multi-ai-debate/
+├─ app.py                 # Streamlit UI와 Playwright 토론 자동화
+├─ start_tunnel.py        # ngrok 터널 실행
+├─ requirements.txt       # Python 패키지 목록
+├─ .env.example           # 환경설정 예시
+├─ .gitignore             # 민감·실행 데이터 제외
+└─ .streamlit/
+   └─ config.toml         # Streamlit 화면 설정
+```
+
+## 라이선스
+
+MIT License
