@@ -146,6 +146,7 @@ def get_windows_clipboard_text() -> str:
 
 
 AI_URLS = {
+    "perplexity": "https://www.perplexity.ai/",
     "claude":  "https://claude.ai/new",
     "chatgpt": "https://chatgpt.com/",
     "gemini":  "https://gemini.google.com/app",
@@ -157,10 +158,16 @@ DEBATE_ORDER_OPTIONS = {
 }
 # ── AutoGen 패턴 1: 에이전트 페르소나 (AssistantAgent의 system_message 역할) ──
 AGENT_PERSONAS = {
+    "perplexity": (
+        "너는 토론자가 아니라 검색 비서이자 근거 수집 담당이야. "
+        "판단과 추천을 최소화하고 최신 사실, 공식 출처, 확인일, 원문 링크를 수집해."
+    ),
     "gemini": (
-        "너는 발산 탐색자야. 넓게 보고 가능한 선택지, 숨은 변수, 반대 가능성, "
-        "비주류 관점까지 먼저 펼쳐. 단정하지 말고 가능성 지도를 넓히는 데 집중해. "
-        "답변은 핵심 위주로 쓰되 마지막 문장이 끊기지 않게 완결해서 써."
+        "너는 근거 기반 발산 탐색자야. Perplexity 팩트팩을 출발점으로 가능한 선택지, "
+        "숨은 변수, 반대 가능성, 비주류 관점을 넓게 제시해. 팩트팩을 그대로 반복하지 말고 "
+        "의사결정에 유용한 대안과 가설을 확장해. 출처가 없는 수치나 사실은 만들지 말고, "
+        "근거가 부족한 내용은 반드시 '가설' 또는 '추가 확인 필요'로 표시해. "
+        "문장 미려함보다 관점의 폭과 누락 방지에 집중해."
     ),
     "chatgpt": (
         "너는 논리와 현실성 검증자야. Gemini 또는 이전 화자의 주장에 있는 논리적 허점, "
@@ -182,6 +189,25 @@ CONSENSUS_KEYWORDS = [
 
 # 자주 바뀌는 클래스 대신 placeholder/aria-label/data-testid 기반 셀렉터
 SELECTORS = {
+    "perplexity": {
+        "input": (
+            'textarea[placeholder*="Ask" i], textarea[aria-label*="Ask" i], '
+            '[contenteditable="true"][data-lexical-editor="true"], '
+            'div[contenteditable="true"], textarea'
+        ),
+        "send": (
+            'button[aria-label*="Submit" i], button[aria-label*="Send" i], '
+            'button[type="submit"], button[data-testid*="submit" i]'
+        ),
+        "stop": (
+            'button[aria-label*="Stop" i], button[data-testid*="stop" i], '
+            'button:has-text("Stop")'
+        ),
+        "response": (
+            '[data-testid*="answer" i], main [class*="prose"], '
+            'main [class*="markdown"], article'
+        ),
+    },
     "claude": {
         "input":    'div[contenteditable="true"][aria-label], div.ProseMirror[contenteditable="true"]',
         "send":     'button[aria-label="Send Message"], button[aria-label="Send message"], button[aria-label*="Send" i]',
@@ -337,7 +363,7 @@ class DebateWorker:
                     self.pages[name] = page
                 self._post(
                     "system",
-                    "✅ Claude / ChatGPT / Gemini 탭을 열었습니다. "
+                    "✅ Perplexity / Gemini / ChatGPT / Claude 탭을 열었습니다. "
                     "각 사이트에 **로그인** 되어 있는지 크롬 창에서 확인하세요.",
                 )
             except Exception as e:
@@ -367,7 +393,8 @@ class DebateWorker:
     # ── 토론 로직 ──
     async def _run_debate(self, topic: str, rounds: int, debate_order: list[str]) -> None:
         """
-        모든 세트: 사용자가 선택한 AI 순서
+        0단계: Perplexity가 최신 정보와 출처를 팩트팩으로 수집
+        모든 세트: Gemini → ChatGPT → Claude
         마지막 세트의 마지막 AI가 최종 종합 글 작성 → GPT가 Word 파일 생성 → Telegram 알림
 
         rounds=1 → 선택 순서 × 1 세트 (마지막 AI = 종합)
@@ -380,14 +407,56 @@ class DebateWorker:
             self.messages = []
             self.last_docx = None
         self._post("user", f"📌 **주제**\n\n{topic}")
-        self._post("system", f"🧭 토론 순서: {' → '.join(ai.upper() for ai in debate_order)}")
+        self._post(
+            "system",
+            "🧭 진행 순서: PERPLEXITY 근거 수집 → "
+            f"{' → '.join(ai.upper() for ai in debate_order)} → "
+            "GPT 최종 반대자 검토 → CLAUDE 수정 최종안",
+        )
 
         total_sets = rounds
         last_speaker: Optional[str] = None
         last_reply: str = topic
         final_text = ""
+        fact_pack = ""
         report_title = make_report_title(topic)
         report_filename = make_report_filename(topic)
+
+        research_prompt = (
+            f"{AGENT_PERSONAS['perplexity']}\n\n"
+            "아래 주제에 대해 최신 정보를 검색해 팩트팩을 만들어줘.\n"
+            "1. 공식 출처를 최우선으로 사용해.\n"
+            "2. 제조사·기관·공식 도움말·보도자료·논문·공식 판매 페이지를 먼저 확인해.\n"
+            "3. 블로그·커뮤니티·사용자 리뷰는 보조 근거로 분리해.\n"
+            "4. 핵심 사실을 표 또는 항목으로 정리해.\n"
+            "5. 각 사실마다 출처 이름, 원문 URL, 확인일을 붙여.\n"
+            "6. 출처에서 직접 확인되지 않은 숫자나 주장은 만들지 마.\n"
+            "7. 결론이나 추천은 최소화하고 팩트 수집에 집중해.\n\n"
+            f"주제:\n{topic}"
+        )
+        self._post("system", "🔎 Perplexity가 최신 정보와 공식 출처를 수집하는 중…")
+        try:
+            fact_pack = await self._ask("perplexity", research_prompt)
+            self._post("perplexity", "🔎 **Perplexity 팩트팩**\n\n" + fact_pack)
+        except Exception as e:
+            self._post(
+                "system",
+                "⚠️ Perplexity 근거 수집에 실패했지만 토론은 계속 진행합니다. "
+                f"Chrome 창에서 보안 확인/로그인이 필요한지 확인하세요: {e}",
+            )
+            fact_pack = (
+                "Perplexity 팩트팩을 확보하지 못했습니다. 모든 모델은 최신 사실과 수치를 "
+                "확정적으로 단정하지 말고 추가 확인 필요 여부를 명시해야 합니다."
+            )
+
+        fact_pack_context = (
+            "\n\n=== Perplexity 팩트팩 ===\n"
+            f"{fact_pack}\n"
+            "=== 팩트팩 사용 규칙 ===\n"
+            "- 자료를 그대로 믿지 말고 출처 신뢰도와 문장-출처 일치 여부를 검토할 것.\n"
+            "- 공식 출처와 리뷰·커뮤니티 의견을 분리할 것.\n"
+            "- 출처 없는 수치나 사실은 확정적으로 사용하지 말 것.\n"
+        )
 
         for s in range(total_sets):
             is_final_set = (s == total_sets - 1)
@@ -403,12 +472,16 @@ class DebateWorker:
                     prompt = (
                         f"{persona}"
                         f"주제: {topic}\n\n"
-                        "핵심 주장을 한국어로 펼쳐줘."
+                        "Perplexity 팩트팩을 바탕으로 가능한 대안과 숨은 변수를 넓게 제시해줘. "
+                        "팩트와 가설을 명확히 구분하고, 출처 없는 사실을 새로 만들지 마."
+                        f"{fact_pack_context}"
                         f"{human_inject}"
                     )
                 elif is_final_speaker:
                     # 마지막 AI: 전체 토론 종합 글 작성 (Word 변환은 GPT가 담당)
-                    convo = self._current_debate_messages({"chatgpt", "gemini", "claude"})
+                    convo = self._current_debate_messages(
+                        {"perplexity", "chatgpt", "gemini", "claude"}
+                    )
                     transcript = "\n\n".join(
                         f"[{m['role'].upper()}]\n{m['content']}" for m in convo
                     )
@@ -418,18 +491,28 @@ class DebateWorker:
                         f"이 토론을 바탕으로 **{report_title}** 제목의 최종 종합 보고서를 한국어로 작성해줘.\n"
                         "- 마크다운 헤더(##/###), 표, 글머리표 적극 활용\n"
                         "- 핵심 결론 요약 (3~5문장)\n"
+                        "- Perplexity 핵심 근거와 출처 신뢰도 요약\n"
                         "- GPT / Gemini / Claude 주장 비교표\n"
                         "- 통합 결론 + 실행 가능한 권고사항\n"
+                        "- 확인된 사실, 추정, 추가 확인 필요 항목을 구분\n"
                         "- 서론 없이 바로 본론\n\n"
                         f"=== 토론 기록 ===\n{transcript}"
                         f"{human_inject}"
                     )
                 else:
+                    role_instruction = (
+                        "Perplexity 팩트팩에서 확인된 사실을 기준으로 대안을 더 넓혀. "
+                        "출처가 없는 주장은 가설로 표시해."
+                        if ai == "gemini"
+                        else
+                        "Perplexity 출처의 신뢰도와 상대 주장의 논리적 허점, 현실적 리스크를 검증해."
+                    )
                     prompt = (
                         f"{persona}"
                         f"주제: {topic}\n\n"
                         f"[{last_speaker.upper()}의 주장]\n{last_reply}\n\n"
-                        "이 주장의 핵심 약점을 짚어 반박하고 너의 관점을 제시해줘. 한국어로."
+                        f"{role_instruction} 한국어로 답해."
+                        f"{fact_pack_context}"
                         f"{human_inject}"
                     )
 
@@ -471,7 +554,9 @@ class DebateWorker:
         if draft_final_text.strip():
             review_transcript = "\n\n".join(
                 f"[{m['role'].upper()}]\n{m['content']}"
-                for m in self._current_debate_messages({"chatgpt", "gemini", "claude"})
+                for m in self._current_debate_messages(
+                    {"perplexity", "chatgpt", "gemini", "claude"}
+                )
             )
             final_review_prompt = (
                 "당신은 최종 반대자 역할이다. 아래 Claude의 최종 결론이 틀렸을 가능성을 검토하라.\n\n"
@@ -600,14 +685,17 @@ class DebateWorker:
 
     async def _summarize(self, summarizer: str) -> None:
         """전체 토론 내용을 지정 AI에게 보내 통합 요약 받기."""
-        convo = self._current_debate_messages({"user", "claude", "chatgpt", "gemini"})
+        convo = self._current_debate_messages(
+            {"user", "perplexity", "claude", "chatgpt", "gemini"}
+        )
         if not convo:
             self._post("system", "⚠️ 요약할 토론 기록이 없습니다.")
             return
 
         transcript = "\n\n".join(f"=== {m['role'].upper()} ===\n{m['content']}" for m in convo)
         prompt = (
-            "다음은 Claude, ChatGPT, Gemini 세 AI가 진행한 토론 기록이다.\n"
+            "다음은 Perplexity 팩트팩과 Claude, ChatGPT, Gemini의 토론 기록이다.\n"
+            "Perplexity는 의견이 아니라 근거 수집 결과로 취급하고, "
             "각 AI 주장의 공통점·차이점·핵심 갈등 지점을 비교 정리하고, "
             "마지막에 통합 결론을 제시해줘. "
             "한국어로, 마크다운 헤더/표/리스트를 적극 활용해 깔끔히 정리해줘.\n\n"
@@ -698,6 +786,55 @@ class DebateWorker:
         return await self._wait_until_done(page, sel, ai, before_response)
 
     async def _last_response_text(self, page: Page, sel: dict, ai: str = "") -> str:
+        if ai == "perplexity":
+            try:
+                text = await page.evaluate(
+                    """
+                    () => {
+                      const selectors = [
+                        '[data-testid*="answer" i]',
+                        'main [class*="prose"]',
+                        'main [class*="markdown"]',
+                        'main article',
+                        'article'
+                      ];
+                      const candidates = [];
+                      const seen = new Set();
+                      for (const selector of selectors) {
+                        for (const node of document.querySelectorAll(selector)) {
+                          const rect = node.getBoundingClientRect();
+                          const style = window.getComputedStyle(node);
+                          if (!rect.width || !rect.height || style.display === 'none') continue;
+                          const value = (node.innerText || node.textContent || '').trim();
+                          if (value.length < 80 || seen.has(value)) continue;
+                          seen.add(value);
+                          candidates.push({ value, node });
+                        }
+                      }
+                      candidates.sort((a, b) => a.value.length - b.value.length);
+                      if (!candidates.length) return '';
+
+                      const best = candidates[candidates.length - 1];
+                      const scope = best.node.closest('article') || best.node.parentElement || best.node;
+                      const links = [];
+                      const seenUrls = new Set();
+                      for (const anchor of scope.querySelectorAll('a[href]')) {
+                        const href = anchor.href || '';
+                        if (!href.startsWith('http') || seenUrls.has(href)) continue;
+                        seenUrls.add(href);
+                        const label = (anchor.innerText || anchor.textContent || '').trim();
+                        links.push(`- ${label || '출처'}: ${href}`);
+                      }
+                      return links.length
+                        ? `${best.value}\n\n출처 링크:\n${links.join('\n')}`
+                        : best.value;
+                    }
+                    """
+                )
+                if text and text.strip():
+                    return text.strip()
+            except Exception:
+                pass
         if ai == "gemini":
             try:
                 text = await page.evaluate(
@@ -1431,6 +1568,7 @@ def get_ngrok_url() -> Optional[str]:
 ROLE_META = {
     "user":    ("🙋 USER",          "user"),
     "system":  ("⚙️ SYSTEM",        "assistant"),
+    "perplexity": ("🔎 PERPLEXITY 팩트팩", "assistant"),
     "claude":  ("🟠 CLAUDE",        "assistant"),
     "chatgpt": ("🟢 CHATGPT",       "assistant"),
     "gemini":  ("🔵 GEMINI",        "assistant"),
@@ -1439,6 +1577,7 @@ ROLE_META = {
 
 DOCX_COLOR = {
     "user":    RGBColor(0xC2, 0x95, 0x00),
+    "perplexity": RGBColor(0x20, 0x82, 0x8A),
     "claude":  RGBColor(0xD9, 0x77, 0x57),
     "chatgpt": RGBColor(0x10, 0xA3, 0x7F),
     "gemini":  RGBColor(0x42, 0x85, 0xF4),
@@ -1700,6 +1839,7 @@ code {
 ROLE_AVATARS = {
     "user": "🙋",
     "system": "⚙️",
+    "perplexity": "🔎",
     "claude": "🟠",
     "chatgpt": "🟢",
     "gemini": "🔵",
@@ -1787,7 +1927,7 @@ def main() -> None:
         st.markdown(
             "**📌 첫 실행 시 체크리스트**\n"
             "1. `.env`에 ngrok 토큰 입력\n"
-            "2. 새 크롬 창에서 Claude / ChatGPT / Gemini 로그인\n"
+            "2. 새 크롬 창에서 Perplexity / Gemini / ChatGPT / Claude 로그인 및 보안 확인\n"
             "3. 캡챠 뜨면 크롬 창에서 직접 풀기"
         )
 
@@ -1821,7 +1961,7 @@ def main() -> None:
         st.markdown(
             '<div class="hero">'
             "<h2>무엇이든 토론에 부쳐 보세요</h2>"
-            "<p>아래 입력창에 주제를 입력하면 Gemini · ChatGPT · Claude가 토론을 시작합니다.<br>"
+            "<p>Perplexity가 근거를 수집한 뒤 Gemini · ChatGPT · Claude가 토론을 시작합니다.<br>"
             "예) 한국 부동산의 향후 2년 전망은 상승일까 하락일까?</p>"
             "</div>",
             unsafe_allow_html=True,
@@ -1870,9 +2010,16 @@ def main() -> None:
         with c2:
             st.text_input(
                 "토론 순서",
-                value="Gemini → ChatGPT → Claude → GPT 최종 반대자 검토 → Claude 수정 최종안",
+                value=(
+                    "Perplexity 근거 수집 → Gemini → ChatGPT → Claude "
+                    "→ GPT 최종 반대자 검토 → Claude 수정 최종안"
+                ),
                 disabled=True,
-                help="Gemini는 발산, GPT는 검증, Claude는 수렴합니다. Claude 초안 뒤 GPT가 최종 반대자 검토를 하고 Claude가 수정 최종안을 작성합니다.",
+                help=(
+                    "Perplexity는 사실과 출처를 수집하고, Gemini는 근거 기반으로 발산하며, "
+                    "GPT는 검증하고 Claude는 수렴합니다. Claude 초안 뒤 GPT가 최종 반대자 "
+                    "검토를 하고 Claude가 수정 최종안을 작성합니다."
+                ),
             )
         debate_order = list(DEFAULT_DEBATE_ORDER)
         if status == "running":

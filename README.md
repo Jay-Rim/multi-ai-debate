@@ -1,37 +1,43 @@
 # AI 토론
 
-Gemini, ChatGPT, Claude의 **유료 웹 서비스 화면을 Playwright로 자동 조작**하여 서로 토론하게 만드는 Streamlit 애플리케이션입니다.
+Perplexity, Gemini, ChatGPT, Claude의 **웹 서비스 화면을 Playwright로 자동 조작**하여 근거를 수집하고 토론하게 만드는 Streamlit 애플리케이션입니다.
 
 별도의 AI API를 호출하지 않으므로 API 사용료는 발생하지 않습니다. 단, 각 AI 서비스의 웹사이트에 로그인할 수 있는 본인 계정이 필요합니다.
 
 ## 토론 진행 방식
 
-토론 순서는 다음과 같이 고정되어 있습니다.
+진행 순서는 다음과 같이 고정되어 있습니다.
 
-1. **Gemini - 발산**
-   - 주제를 넓게 탐색합니다.
-   - 가능한 선택지, 숨은 변수, 대안과 반대 가능성을 제시합니다.
+1. **Perplexity - 검색 비서/근거 수집**
+   - 최신 공식 자료, 기사, 제품 정보, 논문과 원문 링크를 수집합니다.
+   - 공식 출처와 사용자 리뷰·커뮤니티 의견을 분리해 팩트팩을 만듭니다.
+   - 최종 판단에는 참여하지 않습니다.
 
-2. **ChatGPT - 검증**
+2. **Gemini - 근거 기반 발산**
+   - Perplexity 팩트팩을 바탕으로 가능한 선택지와 숨은 변수를 넓게 탐색합니다.
+   - 출처가 없는 내용은 사실로 만들지 않고 가설 또는 추가 확인 필요로 표시합니다.
+
+3. **ChatGPT - 검증**
    - Gemini 주장의 논리적 허점과 근거 부족을 검토합니다.
-   - 비용, 시간, 운영 위험과 실제 실행 가능성을 따집니다.
+   - Perplexity 출처의 신뢰도, 비용, 시간, 운영 위험과 실행 가능성을 따집니다.
 
-3. **Claude - 수렴**
+4. **Claude - 수렴**
    - Gemini와 ChatGPT의 의견을 종합합니다.
    - 최종 판단과 실행 방안을 제시합니다.
 
-4. **ChatGPT - 최종 반대자**
+5. **ChatGPT - 최종 반대자**
    - Claude의 결론이 틀렸을 가능성을 다시 검토합니다.
    - 성급한 결론, 누락된 위험, 과대평가된 실행 가능성을 확인합니다.
 
-5. **Claude - 수정 최종안**
+6. **Claude - 수정 최종안**
    - ChatGPT의 최종 반론을 반영해 최종 보고서를 수정합니다.
 
 완료된 결과는 Word 문서로 로컬 PC에 저장됩니다. 설정한 경우 Telegram으로 완료 알림도 받을 수 있습니다.
 
 ## 주요 기능
 
-- Gemini, ChatGPT, Claude 웹사이트 자동 제어
+- Perplexity, Gemini, ChatGPT, Claude 웹사이트 자동 제어
+- Perplexity를 이용한 최신 정보·공식 출처 팩트팩 생성
 - 토론 세트 수 설정
 - 토론 도중 같은 채팅 입력창으로 진행자 의견 개입
 - 각 AI 답변이 끝날 때까지 DOM 변화를 감지하여 대기
@@ -58,7 +64,7 @@ Gemini, ChatGPT, Claude의 **유료 웹 서비스 화면을 Playwright로 자동
 - Python 3.11 이상 권장
 - Google Chrome 또는 Microsoft Edge
 - Windows 10/11 권장
-- Gemini, ChatGPT, Claude에 로그인 가능한 계정
+- Perplexity, Gemini, ChatGPT, Claude에 접속 가능한 계정
 - 선택 사항: 외부 접속을 위한 ngrok 계정
 - 선택 사항: 완료 알림을 위한 Telegram 봇
 
@@ -162,18 +168,19 @@ http://localhost:8501
 
 브라우저에서 이 주소를 열면 AI 토론 화면이 나타납니다.
 
-동시에 자동화용 Chrome 창에 Gemini, ChatGPT, Claude 탭이 열립니다. 첫 실행에서는 각 탭에 직접 로그인하세요. 로그인 상태는 전용 Chrome 프로필 폴더에 저장되어 다음 실행부터 재사용됩니다.
+동시에 자동화용 Chrome 창에 Perplexity, Gemini, ChatGPT, Claude 탭이 열립니다. 첫 실행에서는 각 탭에 직접 로그인하고 Perplexity의 Cloudflare 보안 확인이 나타나면 수동으로 통과하세요. 로그인 상태는 전용 Chrome 프로필 폴더에 저장되어 다음 실행부터 재사용됩니다.
 
 ## 사용 방법
 
 1. Streamlit 화면 하단에서 토론 세트 수를 선택합니다.
 2. 채팅 입력창에 토론 주제를 입력합니다.
-3. Gemini가 먼저 가능성을 넓게 제시합니다.
-4. ChatGPT가 논리와 현실성을 검증합니다.
-5. Claude가 1차 결론을 작성합니다.
-6. ChatGPT가 최종 반대자 관점에서 결론을 다시 검토합니다.
-7. Claude가 수정 최종안을 작성합니다.
-8. Word 문서가 생성되고 결과 화면에 다운로드 버튼이 표시됩니다.
+3. Perplexity가 최신 정보와 공식 출처를 검색해 팩트팩을 만듭니다.
+4. Gemini가 팩트팩을 바탕으로 가능성과 대안을 넓게 제시합니다.
+5. ChatGPT가 출처 신뢰도, 논리와 현실성을 검증합니다.
+6. Claude가 1차 결론을 작성합니다.
+7. ChatGPT가 최종 반대자 관점에서 결론을 다시 검토합니다.
+8. Claude가 수정 최종안을 작성합니다.
+9. Word 문서가 생성되고 결과 화면에 다운로드 버튼이 표시됩니다.
 
 토론 진행 중 채팅 입력창에 추가 의견을 쓰면 다음 AI 발화 전에 **Human-in-the-loop 진행자 개입**으로 전달됩니다.
 
@@ -182,7 +189,8 @@ http://localhost:8501
 토론 세트 수가 `1`이면 다음 순서로 진행됩니다.
 
 ```text
-Gemini → ChatGPT → Claude 초안
+Perplexity 팩트팩
+→ Gemini → ChatGPT → Claude 초안
 → ChatGPT 최종 반대자 검토
 → Claude 수정 최종안
 → Word 생성
@@ -191,7 +199,8 @@ Gemini → ChatGPT → Claude 초안
 토론 세트 수가 `2`이면 Gemini, ChatGPT, Claude의 토론을 두 번 반복한 뒤 최종 검토 단계로 넘어갑니다.
 
 ```text
-Gemini → ChatGPT → Claude
+Perplexity 팩트팩
+→ Gemini → ChatGPT → Claude
 → Gemini → ChatGPT → Claude 초안
 → ChatGPT 최종 반대자 검토
 → Claude 수정 최종안
@@ -294,7 +303,7 @@ BROWSER_CHANNEL=chrome
 
 ### 로그인 또는 CAPTCHA에서 멈춤
 
-자동화 Chrome 창을 확인하고 직접 로그인하거나 CAPTCHA를 해결하세요. 입력창이 나타나면 자동화가 다시 진행됩니다.
+자동화 Chrome 창을 확인하고 직접 로그인하거나 CAPTCHA를 해결하세요. 특히 Perplexity는 최초 접속 시 Cloudflare 보안 확인 화면이 나타날 수 있습니다. 입력창이 나타나면 자동화가 다시 진행됩니다.
 
 ### 답변이 중간에 잘림
 
