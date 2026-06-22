@@ -249,6 +249,7 @@ class DebateWorker:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.pages: dict[str, Page] = {}
         self.last_docx: Optional[dict] = None
+        self.persist_records: bool = False
 
     def inject_message(self, msg: str) -> None:
         """진행 중인 토론에 사용자 개입 메시지를 주입."""
@@ -261,7 +262,13 @@ class DebateWorker:
         self.thread = threading.Thread(target=self._thread_main, daemon=True)
         self.thread.start()
 
-    def submit_topic(self, topic: str, rounds: int, debate_order: Optional[list[str]] = None) -> None:
+    def submit_topic(
+        self,
+        topic: str,
+        rounds: int,
+        debate_order: Optional[list[str]] = None,
+        no_local_records: bool = True,
+    ) -> None:
         # 메인 스레드에서 즉시 running으로 (워커 스레드 픽업까지 기다리지 않게)
         with self.lock:
             if self.status == "ready":
@@ -270,12 +277,14 @@ class DebateWorker:
                 self.current_debate_started_at = time.time()
                 self.last_docx = None
                 self.error = None
+                self.persist_records = not no_local_records
         self._clear_inject_queue()
         self.cmd_queue.put({
             "type": "debate",
             "topic": topic,
             "rounds": rounds,
             "debate_order": normalize_debate_order(debate_order),
+            "no_local_records": no_local_records,
         })
 
     def submit_summary(self, summarizer: str = "gemini") -> None:
@@ -289,6 +298,9 @@ class DebateWorker:
     def _post(self, role: str, content: str) -> None:
         with self.lock:
             self.messages.append({"role": role, "content": content, "ts": time.time()})
+            persist_records = self.persist_records
+        if not persist_records:
+            return
         try:
             log_dir = Path(__file__).parent / "logs"
             log_dir.mkdir(exist_ok=True)
@@ -650,18 +662,26 @@ class DebateWorker:
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
         out_dir = Path(__file__).parent / "out"
-        out_dir.mkdir(exist_ok=True)
+        with self.lock:
+            persist_records = self.persist_records
+        if persist_records:
+            out_dir.mkdir(exist_ok=True)
 
         if gpt_docx:
             docx_bytes = gpt_docx
             filename = f"{Path(report_filename).stem}_gpt_{stamp}.docx"
-            (out_dir / filename).write_bytes(docx_bytes)
+            if persist_records:
+                (out_dir / filename).write_bytes(docx_bytes)
             with self.lock:
                 self.last_docx = {
                     "bytes": docx_bytes, "filename": filename, "topic": topic,
                     "title": report_title, "gpt_link": gpt_link, "gpt_chat_url": gpt_chat_url,
+                    "persisted": persist_records,
                 }
-            self._post("system", f"✅ GPT Word 파일 사용 → `out/{filename}`")
+            if persist_records:
+                self._post("system", f"✅ GPT Word 파일 저장 → `out/{filename}`")
+            else:
+                self._post("system", "✅ GPT Word 파일 생성 완료 — 로컬 디스크에는 저장하지 않습니다.")
             if gpt_link:
                 self._post("system", f"🔗 ChatGPT 생성 문서 링크: {gpt_link}")
             if gpt_chat_url:
@@ -672,11 +692,13 @@ class DebateWorker:
             try:
                 docx_bytes = build_docx_from_markdown(topic, final_text, report_title=report_title)
                 filename = f"{Path(report_filename).stem}_{stamp}.docx"
-                (out_dir / filename).write_bytes(docx_bytes)
+                if persist_records:
+                    (out_dir / filename).write_bytes(docx_bytes)
                 with self.lock:
                     self.last_docx = {
                         "bytes": docx_bytes, "filename": filename, "topic": topic,
                         "title": report_title, "gpt_link": gpt_link, "gpt_chat_url": gpt_chat_url,
+                        "persisted": persist_records,
                     }
             except Exception as e:
                 self._post("system", f"⚠️ Word 생성 실패: {e}")
@@ -685,7 +707,12 @@ class DebateWorker:
 
         # ── 완료 알림 발송: 본문/파일은 싣지 않고 완료 사실만 알림 ──
         try:
-            sent_channels = send_completion_notifications(topic, filename, gpt_chat_url)
+            sent_channels = send_completion_notifications(
+                topic,
+                filename,
+                gpt_chat_url,
+                persist_records,
+            )
             if sent_channels:
                 self._post("system", f"📣 완료 알림 발송 → {', '.join(sent_channels)}")
             else:
@@ -694,14 +721,27 @@ class DebateWorker:
             self._post("system", f"⚠️ 완료 알림 발송 실패: {e}")
 
         # ── 히스토리 저장 ──
-        try:
-            snap_msgs = self._current_debate_messages()
-            saved = save_history(topic, snap_msgs, filename)
-            self._post("system", f"💾 히스토리 저장됨 → `history/{saved}`")
-        except Exception as e:
-            self._post("system", f"⚠️ 히스토리 저장 실패: {e}")
+        if persist_records:
+            try:
+                snap_msgs = self._current_debate_messages()
+                saved = save_history(topic, snap_msgs, filename)
+                self._post("system", f"💾 히스토리 저장됨 → `history/{saved}`")
+            except Exception as e:
+                self._post("system", f"⚠️ 히스토리 저장 실패: {e}")
+        else:
+            self._post(
+                "system",
+                "🔒 로컬 기록 없음 — 질문·답변, 실행 로그, Word 파일을 디스크에 저장하지 않았습니다.",
+            )
 
-        self._post("system", "🏁 **토론 완료** — 사이드바에서 Word 다운로드 / 히스토리 확인 가능")
+        if persist_records:
+            self._post("system", "🏁 **토론 완료** — Word 다운로드와 히스토리 확인이 가능합니다.")
+        else:
+            self._post(
+                "system",
+                "🏁 **토론 완료** — Word 다운로드가 가능합니다. "
+                "서버 재시작 전까지 메모리에만 유지됩니다.",
+            )
         self._set_status("ready")
 
     async def _summarize(self, summarizer: str) -> None:
@@ -1234,14 +1274,10 @@ class DebateWorker:
             async with page.expect_download(timeout=timeout_sec * 1000) as dl_info:
                 await target.click()
             download = await dl_info.value
-            tmp = Path(__file__).parent / "out" / f"_gpt_dl_{int(time.time())}.docx"
-            tmp.parent.mkdir(exist_ok=True)
-            await download.save_as(str(tmp))
-            data = tmp.read_bytes()
-            try:
-                tmp.unlink()
-            except Exception:
-                pass
+            download_path = await download.path()
+            if not download_path:
+                return None, link_url
+            data = Path(download_path).read_bytes()
             return data, link_url
         except Exception:
             return None, link_url
@@ -1292,14 +1328,10 @@ class DebateWorker:
             return None
 
         try:
-            tmp_path = Path(__file__).parent / "out" / f"_claude_dl_{int(time.time())}.docx"
-            tmp_path.parent.mkdir(exist_ok=True)
-            await download.save_as(str(tmp_path))
-            data = tmp_path.read_bytes()
-            try:
-                tmp_path.unlink()
-            except Exception:
-                pass
+            download_path = await download.path()
+            if not download_path:
+                return None
+            data = Path(download_path).read_bytes()
             return data
         except Exception:
             return None
@@ -1541,9 +1573,15 @@ def pop_start_topic_command() -> Optional[dict]:
         topic = str(payload.get("topic", "")).strip()
         rounds = int(payload.get("rounds", 1))
         debate_order = normalize_debate_order(payload.get("debate_order"))
+        no_local_records = bool(payload.get("no_local_records", True))
         if not topic:
             return None
-        return {"topic": topic, "rounds": max(1, min(5, rounds)), "debate_order": debate_order}
+        return {
+            "topic": topic,
+            "rounds": max(1, min(5, rounds)),
+            "debate_order": debate_order,
+            "no_local_records": no_local_records,
+        }
     except Exception:
         return None
 
@@ -1730,10 +1768,11 @@ def send_completion_notifications(
     topic: str,
     filename: Optional[str],
     gpt_chat_url: Optional[str] = None,
+    persisted: bool = True,
 ) -> list[str]:
     """토론 완료 사실만 알림. 결과 본문과 파일은 외부 알림에 싣지 않는다."""
     sent: list[str] = []
-    message = build_completion_notice(topic, filename, gpt_chat_url)
+    message = build_completion_notice(topic, filename, gpt_chat_url, persisted)
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         send_telegram_notice(message)
         sent.append("Telegram")
@@ -1744,8 +1783,15 @@ def build_completion_notice(
     topic: str,
     filename: Optional[str],
     gpt_chat_url: Optional[str] = None,
+    persisted: bool = True,
 ) -> str:
-    file_line = f"\n저장 파일: out/{filename}" if filename else ""
+    file_line = ""
+    if filename:
+        file_line = (
+            f"\n저장 파일: out/{filename}"
+            if persisted
+            else f"\n다운로드 파일명: {filename} (PC에 자동 저장하지 않음)"
+        )
     chat_line = f"\nChatGPT 대화: {gpt_chat_url}" if gpt_chat_url else ""
     return (
         "AI 토론이 완료되었습니다.\n"
@@ -1883,7 +1929,12 @@ def main() -> None:
 
     start_cmd = pop_start_topic_command()
     if start_cmd and status == "ready":
-        worker.submit_topic(start_cmd["topic"], start_cmd["rounds"], start_cmd.get("debate_order"))
+        worker.submit_topic(
+            start_cmd["topic"],
+            start_cmd["rounds"],
+            start_cmd.get("debate_order"),
+            no_local_records=bool(start_cmd.get("no_local_records", True)),
+        )
         clear_start_topic_command()
         st.rerun()
 
@@ -1973,7 +2024,10 @@ def main() -> None:
             view_messages = []
     else:
         if status == "ready" and last_docx:
-            st.info("이전 토론은 히스토리와 결과 다운로드 영역에 보관했습니다. 새 주제는 아래 입력창에서 바로 시작하세요.")
+            if last_docx.get("persisted"):
+                st.info("이전 토론은 히스토리와 결과 다운로드 영역에 보관했습니다. 새 주제는 아래 입력창에서 바로 시작하세요.")
+            else:
+                st.info("완료된 토론은 현재 메모리에만 있습니다. 서버를 재시작하면 사라집니다.")
             view_messages = []
         else:
             view_messages = messages
@@ -2017,6 +2071,22 @@ def main() -> None:
     # ── 하단 토론 설정: 새 토론 시작 직전에 조율 ──
     with st.container(border=True):
         st.markdown("**토론 설정**")
+        no_local_records = st.checkbox(
+            "이 앱의 질문·답변 기록을 PC에 남기지 않기",
+            value=True,
+            key="no_local_records",
+            disabled=status != "ready",
+            help=(
+                "체크하면 history, logs, out 폴더에 이번 토론의 질문·답변과 Word 파일을 "
+                "저장하지 않습니다. 화면 다운로드는 가능하며 서버를 재시작하면 메모리 결과는 사라집니다."
+            ),
+        )
+        if no_local_records:
+            st.caption(
+                "로컬 비공개 모드: 이 앱의 history/logs/out 저장만 차단합니다. "
+                "자동화 Chrome 프로필의 방문 기록·캐시와 각 AI 서비스 서버의 대화 기록은 "
+                "각 브라우저·서비스 설정에서 별도로 관리해야 합니다."
+            )
         c1, c2 = st.columns([1, 2])
         with c1:
             rounds = st.slider(
@@ -2050,7 +2120,12 @@ def main() -> None:
     if status == "ready":
         user_msg = st.chat_input("토론 주제를 입력하세요…")
         if user_msg and user_msg.strip():
-            worker.submit_topic(user_msg.strip(), rounds, debate_order)
+            worker.submit_topic(
+                user_msg.strip(),
+                rounds,
+                debate_order,
+                no_local_records=no_local_records,
+            )
             st.rerun()
     elif status == "running":
         user_msg = st.chat_input("토론에 개입할 메시지 — 다음 발화 전에 반영됩니다…")
