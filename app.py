@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -452,6 +453,17 @@ class DebateWorker:
         self._post("system", "🔎 Perplexity가 최신 정보와 공식 출처를 수집하는 중…")
         try:
             fact_pack = await self._ask("perplexity", research_prompt)
+            if len(fact_pack.strip()) < 400:
+                self._post(
+                    "system",
+                    f"⚠️ Perplexity 팩트팩이 {len(fact_pack.strip())}자로 너무 짧아 한 번 재검색합니다.",
+                )
+                fact_pack = await self._ask(
+                    "perplexity",
+                    research_prompt
+                    + "\n\n이전 답변이 불완전했습니다. 한 문장 요약으로 끝내지 말고, "
+                    "최소 5개의 핵심 사실과 각 출처 링크를 포함한 완전한 팩트팩을 작성해.",
+                )
             self._post("perplexity", "🔎 **Perplexity 팩트팩**\n\n" + fact_pack)
         except Exception as e:
             self._post(
@@ -464,8 +476,14 @@ class DebateWorker:
                 "확정적으로 단정하지 말고 추가 확인 필요 여부를 명시해야 합니다."
             )
 
+        fact_pack_id = hashlib.sha256(fact_pack.encode("utf-8")).hexdigest()[:10]
+        self._post(
+            "system",
+            f"🧾 Perplexity 팩트팩 준비 완료: {len(fact_pack)}자 / ID `{fact_pack_id}`",
+        )
         fact_pack_context = (
             "\n\n=== Perplexity 팩트팩 ===\n"
+            f"팩트팩 ID: {fact_pack_id}\n"
             f"{fact_pack}\n"
             "=== 팩트팩 사용 규칙 ===\n"
             "- 자료를 그대로 믿지 말고 출처 신뢰도와 문장-출처 일치 여부를 검토할 것.\n"
@@ -476,6 +494,8 @@ class DebateWorker:
         gemini_verification_instruction = (
             "Perplexity 팩트팩을 교차검증하고 부족한 사실을 추가 탐색해.\n"
             "다음 형식을 반드시 지켜:\n"
+            f"0. 첫 줄에 정확히 `팩트팩 반영 확인: {fact_pack_id}`라고 쓰고, "
+            "그 아래에 팩트팩에서 직접 읽은 핵심 사실 3개를 먼저 요약\n"
             "1. 핵심 사실 검증표: 주장 / 상태(검증됨·상충함·미검증) / 근거 / URL\n"
             "2. Perplexity와 상충하는 자료\n"
             "3. 누락된 추가 팩트와 원문 URL\n"
@@ -549,6 +569,28 @@ class DebateWorker:
                 self._post("system", f"➡️ {ai.upper()} 에게 전달 중…")
                 try:
                     reply = await self._ask(ai, prompt)
+                    if ai == "gemini" and fact_pack_id not in reply:
+                        self._post(
+                            "system",
+                            "⚠️ GEMINI 답변에서 팩트팩 반영 ID를 찾지 못해 한 번 재질문합니다.",
+                        )
+                        retry_prompt = (
+                            f"{persona}"
+                            f"주제: {topic}\n\n"
+                            "직전 답변은 Perplexity 팩트팩 반영 여부를 확인할 수 없었습니다. "
+                            f"첫 줄에 반드시 `팩트팩 반영 확인: {fact_pack_id}`를 그대로 쓰고, "
+                            "팩트팩에서 직접 읽은 핵심 사실 3개를 인용한 뒤 교차검증을 다시 수행해.\n"
+                            f"{gemini_verification_instruction}"
+                            f"{fact_pack_context}"
+                            f"{human_inject}"
+                        )
+                        reply = await self._ask("gemini", retry_prompt)
+                        if fact_pack_id not in reply:
+                            self._post(
+                                "system",
+                                "⚠️ GEMINI가 재시도 후에도 팩트팩 반영 ID를 출력하지 않았습니다. "
+                                "GPT가 팩트팩과 Gemini 답변을 직접 대조합니다.",
+                            )
                 except Exception as e:
                     if ai != "gemini":
                         raise
@@ -857,7 +899,8 @@ class DebateWorker:
                         'main [class*="prose"]',
                         'main [class*="markdown"]',
                         'main article',
-                        'article'
+                        'article',
+                        'main'
                       ];
                       const candidates = [];
                       const seen = new Set();
@@ -887,7 +930,7 @@ class DebateWorker:
                         links.push(`- ${label || '출처'}: ${href}`);
                       }
                       return links.length
-                        ? `${best.value}\n\n출처 링크:\n${links.join('\n')}`
+                        ? `${best.value}\\n\\n출처 링크:\\n${links.join('\\n')}`
                         : best.value;
                     }
                     """
@@ -1412,6 +1455,156 @@ class DebateWorker:
         self._post("system", f"📋 GEMINI 복사본 ({len(copied)}자)\n\n{copied}")
         return copied
 
+    async def _best_perplexity_dom_text(
+        self,
+        page: Page,
+        fallback_text: str,
+    ) -> str:
+        try:
+            dom_text = await page.evaluate(
+                """
+                () => {
+                  const selectors = [
+                    '[data-testid*="answer" i]',
+                    'main [class*="prose"]',
+                    'main [class*="markdown"]',
+                    'article',
+                    'main'
+                  ];
+                  const candidates = [];
+                  const seen = new Set();
+                  for (const selector of selectors) {
+                    for (const node of document.querySelectorAll(selector)) {
+                      const text = (node.innerText || node.textContent || '').trim();
+                      if (text.length < 80 || seen.has(text)) continue;
+                      seen.add(text);
+                      candidates.push({ node, text });
+                    }
+                  }
+                  candidates.sort((a, b) => a.text.length - b.text.length);
+                  if (!candidates.length) return '';
+                  const best = candidates[candidates.length - 1];
+                  const links = [];
+                  const seenUrls = new Set();
+                  for (const anchor of best.node.querySelectorAll('a[href]')) {
+                    const href = anchor.href || '';
+                    if (!href.startsWith('http') || seenUrls.has(href)) continue;
+                    seenUrls.add(href);
+                    const label = (anchor.innerText || anchor.textContent || '').trim();
+                    links.push(`- ${label || '출처'}: ${href}`);
+                  }
+                  return links.length
+                    ? `${best.text}\\n\\n출처 링크:\\n${links.join('\\n')}`
+                    : best.text;
+                }
+                """
+            )
+        except Exception:
+            dom_text = ""
+
+        if len(dom_text.strip()) > len(fallback_text.strip()):
+            self._post(
+                "system",
+                f"✅ PERPLEXITY: 전체 DOM에서 팩트팩 확보 ({len(dom_text.strip())}자)",
+            )
+            return dom_text.strip()
+        return fallback_text
+
+    async def _copy_last_perplexity_response_text(
+        self,
+        page: Page,
+        fallback_text: str,
+    ) -> str:
+        """Perplexity 답변의 복사 버튼을 눌러 잘리지 않은 전체 텍스트를 확보한다."""
+        sentinel = f"__AI_DEBATE_PERPLEXITY_COPY_{time.time_ns()}__"
+        try:
+            set_windows_clipboard_text(sentinel)
+        except Exception:
+            sentinel = ""
+
+        try:
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(0.5)
+            clicked_label = await page.evaluate(
+                """
+                () => {
+                  const labelOf = (el) => [
+                    el.innerText,
+                    el.textContent,
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('title'),
+                    el.getAttribute('data-tooltip'),
+                    el.getAttribute('data-testid')
+                  ].filter(Boolean).join(' ').trim();
+
+                  const candidates = [];
+                  for (const el of document.querySelectorAll('button,[role="button"]')) {
+                    const label = labelOf(el);
+                    const lower = label.toLowerCase();
+                    if (!lower.includes('copy') && !label.includes('복사')) continue;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    if (!rect.width || !rect.height ||
+                        style.display === 'none' || style.visibility === 'hidden') continue;
+                    candidates.push({ el, label, top: rect.top, left: rect.left });
+                  }
+                  candidates.sort((a, b) => (a.top - b.top) || (a.left - b.left));
+                  const target = candidates[candidates.length - 1];
+                  if (!target) return '';
+                  target.el.scrollIntoView({ block: 'center', inline: 'nearest' });
+                  target.el.click();
+                  return target.label || 'copy';
+                }
+                """
+            )
+        except Exception as e:
+            self._post(
+                "system",
+                f"ℹ️ PERPLEXITY: 복사 버튼 클릭 실패 — DOM 텍스트 사용: {e}",
+            )
+            return await self._best_perplexity_dom_text(page, fallback_text)
+
+        if not clicked_label:
+            self._post(
+                "system",
+                "ℹ️ PERPLEXITY: 복사 버튼을 찾지 못해 DOM 텍스트를 사용합니다.",
+            )
+            return await self._best_perplexity_dom_text(page, fallback_text)
+
+        await asyncio.sleep(1.0)
+        try:
+            copied = get_windows_clipboard_text().strip()
+        except Exception:
+            copied = ""
+
+        if not copied or (sentinel and copied == sentinel):
+            try:
+                copied = (
+                    await page.evaluate(
+                        "navigator.clipboard && navigator.clipboard.readText "
+                        "? navigator.clipboard.readText() : ''"
+                    )
+                    or ""
+                ).strip()
+            except Exception:
+                copied = ""
+
+        if not copied or (sentinel and copied == sentinel):
+            self._post(
+                "system",
+                "ℹ️ PERPLEXITY: 복사 후 클립보드가 바뀌지 않아 기존 DOM 텍스트를 사용합니다.",
+            )
+            return await self._best_perplexity_dom_text(page, fallback_text)
+
+        if len(copied) < len(fallback_text):
+            return fallback_text
+
+        self._post(
+            "system",
+            f"✅ PERPLEXITY: 복사 버튼으로 전체 팩트팩 확보 ({len(copied)}자)",
+        )
+        return copied
+
     async def _wait_until_done(
         self,
         page: Page,
@@ -1476,6 +1669,11 @@ class DebateWorker:
                 await asyncio.sleep(2.0)
                 final_text = await self._last_response_text(page, sel, ai)
                 if final_text == cur and not await _stop_visible():
+                    if ai == "perplexity":
+                        return await self._copy_last_perplexity_response_text(
+                            page,
+                            final_text,
+                        )
                     if ai == "gemini":
                         return await self._copy_last_gemini_response_text(page, final_text)
                     return final_text
